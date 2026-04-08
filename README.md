@@ -8,6 +8,7 @@ Ogni directory contiene un progetto autonomo con il proprio file YAML e un `secr
 
 | Progetto | Descrizione | Articolo |
 |---|---|---|
+| Sveglia | Sveglia da comodino | [link](https://cecchelab.dev/blog/2026-04-sveglia-01) |
 
 ## Utilizzo
 
