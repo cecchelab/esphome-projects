@@ -1,0 +1,747 @@
+substitutions:
+  device_name: sveglia-esphome
+  friendly_name: Sveglia ESPHome
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  comment: Sveglia da comodino con ESP32-C3, OLED e buzzer
+  on_boot:
+    priority: -10
+    then:
+      - lambda: |-
+          id(alarm_ringing) = false;
+          id(active_alarm_index) = 0;
+          id(ring_started_ts) = 0;
+          for (int i = 0; i < 5; i++) {
+            id(last_trigger_keys)[i] = -1;
+          }
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Sveglie-Esphome Fallback Hotspot"
+    password: !secret ap_password
+
+captive_portal:
+
+# ---------------------------------------------------------------------------
+# Time: SNTP (independent from Home Assistant)
+# ---------------------------------------------------------------------------
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "Europe/Rome"
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+      - 2.pool.ntp.org
+
+# ---------------------------------------------------------------------------
+# I2C bus for OLED
+# ---------------------------------------------------------------------------
+i2c:
+  sda: GPIO6
+  scl: GPIO7
+  scan: true
+  frequency: 400kHz
+
+# ---------------------------------------------------------------------------
+# Fonts
+# ---------------------------------------------------------------------------
+font:
+  - file: "gfonts://Roboto Mono"
+    id: font_time
+    size: 32
+  - file: "gfonts://Roboto Mono"
+    id: font_small
+    size: 12
+
+image:
+  - file: "mdi:alarm"
+    id: icon_sveglia
+    resize: 12x12      # Regola la dimensione in base al tuo display
+    type: BINARY       # Ottimale per display OLED monocromatici SSD1306
+
+
+# ---------------------------------------------------------------------------
+# Buzzer (passive piezo on GPIO3 via LEDC PWM)
+# ---------------------------------------------------------------------------
+output:
+  - platform: ledc
+    pin: GPIO10
+    id: rtttl_out
+
+rtttl:
+  output: rtttl_out
+
+# ---------------------------------------------------------------------------
+# Globals
+# ---------------------------------------------------------------------------
+globals:
+  - id: alarm_ringing
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: active_alarm_index
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: ring_started_ts
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: last_trigger_keys
+    type: int[5]
+    restore_value: no
+    initial_value: '{-1, -1, -1, -1, -1}'
+  - id: lista_giorni
+    type: std::vector<std::string>
+    restore_value: no
+    initial_value: '{"DOM", "LUN", "MAR", "MER", "GIO", "VEN", "SAB"}'
+
+
+# ---------------------------------------------------------------------------
+# Scripts
+# ---------------------------------------------------------------------------
+script:
+  
+  - id: start_alarm_sound
+    mode: restart
+    then:
+      - while:
+          condition:
+            lambda: 'return id(alarm_ringing);'
+          then:
+            - rtttl.play: "Brahms:d=4,o=5,b=80:8e,8e,g.,8e,8e,g.,8e,8g,c6,b,8a,8a,g,8d,8e,f,8d,8d,8e,f,8d,8f,b,a,g,8b,c6"
+
+  - id: stop_alarm_script
+    mode: restart
+    then:
+      - lambda: |-
+          id(alarm_ringing) = false;
+          id(active_alarm_index) = 0;
+          id(ring_started_ts) = 0;
+
+# ---------------------------------------------------------------------------
+# Physical stop button (GPIO4, active low with pullup)
+# ---------------------------------------------------------------------------
+binary_sensor:
+  - platform: gpio
+    id: stop_button
+    name: "${friendly_name} Pulsante Stop"
+    pin:
+      number: GPIO4
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    filters:
+      - delayed_on: 20ms
+    on_press:
+      - script.execute: stop_alarm_script
+
+  # - platform: status
+  #   id: node_status
+  #   internal: true
+
+# ===========================================================================
+# SWITCHES
+# ===========================================================================
+switch:
+  # --- Master alarm toggle ---
+  - platform: template
+    id: master_alarm_enabled
+    name: "Sveglia abilitata"
+    icon: mdi:alarm-check
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  # --- Alarm 1 ---
+  - platform: template
+    id: alarm_1_enabled
+    name: "Allarme 1 attivo"
+    icon: mdi:alarm
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_1_mon
+    name: "Allarme 1 lun"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_1_tue
+    name: "Allarme 1 mar"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_1_wed
+    name: "Allarme 1 mer"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_1_thu
+    name: "Allarme 1 gio"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_1_fri
+    name: "Allarme 1 ven"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_1_sat
+    name: "Allarme 1 sab"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_1_sun
+    name: "Allarme 1 dom"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  # --- Alarm 2 ---
+  - platform: template
+    id: alarm_2_enabled
+    name: "Allarme 2 attivo"
+    icon: mdi:alarm
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_2_mon
+    name: "Allarme 2 lun"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_2_tue
+    name: "Allarme 2 mar"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_2_wed
+    name: "Allarme 2 mer"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_2_thu
+    name: "Allarme 2 gio"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_2_fri
+    name: "Allarme 2 ven"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_2_sat
+    name: "Allarme 2 sab"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_2_sun
+    name: "Allarme 2 dom"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  # --- Alarm 3 ---
+  - platform: template
+    id: alarm_3_enabled
+    name: "Allarme 3 attivo"
+    icon: mdi:alarm
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_3_mon
+    name: "Allarme 3 lun"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_3_tue
+    name: "Allarme 3 mar"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_3_wed
+    name: "Allarme 3 mer"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_3_thu
+    name: "Allarme 3 gio"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_3_fri
+    name: "Allarme 3 ven"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_3_sat
+    name: "Allarme 3 sab"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_3_sun
+    name: "Allarme 3 dom"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  # --- Alarm 4 ---
+  - platform: template
+    id: alarm_4_enabled
+    name: "Allarme 4 attivo"
+    icon: mdi:alarm
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_4_mon
+    name: "Allarme 4 lun"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_4_tue
+    name: "Allarme 4 mar"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_4_wed
+    name: "Allarme 4 mer"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_4_thu
+    name: "Allarme 4 gio"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_4_fri
+    name: "Allarme 4 ven"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_4_sat
+    name: "Allarme 4 sab"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_4_sun
+    name: "Allarme 4 dom"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  # --- Alarm 5 ---
+  - platform: template
+    id: alarm_5_enabled
+    name: "Allarme 5 attivo"
+    icon: mdi:alarm
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_5_mon
+    name: "Allarme 5 lun"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_5_tue
+    name: "Allarme 5 mar"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_5_wed
+    name: "Allarme 5 mer"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_5_thu
+    name: "Allarme 5 gio"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_5_fri
+    name: "Allarme 5 ven"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_5_sat
+    name: "Allarme 5 sab"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    id: alarm_5_sun
+    name: "Allarme 5 dom"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+# ===========================================================================
+# NUMBERS (alarm hour/minute + ring duration)
+# ===========================================================================
+number:
+  - platform: template
+    id: ring_duration_minutes
+    name: "Durata suoneria"
+    icon: mdi:timer-outline
+    unit_of_measurement: min
+    optimistic: true
+    restore_value: true
+    initial_value: 5
+    min_value: 1
+    max_value: 15
+    step: 1
+    mode: box
+
+  # --- Alarm 1 ---
+  - platform: template
+    id: alarm_1_hour
+    name: "Allarme 1 ora"
+    icon: mdi:clock-outline
+    optimistic: true
+    restore_value: true
+    initial_value: 7
+    min_value: 0
+    max_value: 23
+    step: 1
+    mode: box
+  - platform: template
+    id: alarm_1_minute
+    name: "Allarme 1 minuti"
+    icon: mdi:clock-outline
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    min_value: 0
+    max_value: 59
+    step: 1
+    mode: box
+
+  # --- Alarm 2 ---
+  - platform: template
+    id: alarm_2_hour
+    name: "Allarme 2 ora"
+    icon: mdi:clock-outline
+    optimistic: true
+    restore_value: true
+    initial_value: 8
+    min_value: 0
+    max_value: 23
+    step: 1
+    mode: box
+  - platform: template
+    id: alarm_2_minute
+    name: "Allarme 2 minuti"
+    icon: mdi:clock-outline
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    min_value: 0
+    max_value: 59
+    step: 1
+    mode: box
+
+  # --- Alarm 3 ---
+  - platform: template
+    id: alarm_3_hour
+    name: "Allarme 3 ora"
+    icon: mdi:clock-outline
+    optimistic: true
+    restore_value: true
+    initial_value: 9
+    min_value: 0
+    max_value: 23
+    step: 1
+    mode: box
+  - platform: template
+    id: alarm_3_minute
+    name: "Allarme 3 minuti"
+    icon: mdi:clock-outline
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    min_value: 0
+    max_value: 59
+    step: 1
+    mode: box
+
+  # --- Alarm 4 ---
+  - platform: template
+    id: alarm_4_hour
+    name: "Allarme 4 ora"
+    icon: mdi:clock-outline
+    optimistic: true
+    restore_value: true
+    initial_value: 10
+    min_value: 0
+    max_value: 23
+    step: 1
+    mode: box
+  - platform: template
+    id: alarm_4_minute
+    name: "Allarme 4 minuti"
+    icon: mdi:clock-outline
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    min_value: 0
+    max_value: 59
+    step: 1
+    mode: box
+
+  # --- Alarm 5 ---
+  - platform: template
+    id: alarm_5_hour
+    name: "Allarme 5 ora"
+    icon: mdi:clock-outline
+    optimistic: true
+    restore_value: true
+    initial_value: 11
+    min_value: 0
+    max_value: 23
+    step: 1
+    mode: box
+  - platform: template
+    id: alarm_5_minute
+    name: "Allarme 5 minuti"
+    icon: mdi:clock-outline
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    min_value: 0
+    max_value: 59
+    step: 1
+    mode: box
+
+# ===========================================================================
+# BUTTON (HA-exposed stop)
+# ===========================================================================
+button:
+  - platform: template
+    id: stop_alarm_button
+    name: "Stop sveglia"
+    icon: mdi:alarm-off
+    on_press:
+      - script.execute: stop_alarm_script
+
+# ===========================================================================
+# DISPLAY (SSD1306 128x64 OLED)
+# ===========================================================================
+display:
+  - platform: ssd1306_i2c
+    id: oled_display
+    model: "SH1106_128X64"
+    address: 0x3C
+    update_interval: 1s
+    lambda: |-
+      auto now = id(sntp_time).now();
+
+      // --- ORE ---
+      if (now.is_valid()) {
+        it.strftime(13, 11, id(font_time), "%H:%M", now);
+      } else {
+        it.print(13, 11, id(font_time), "--:--");
+      }
+
+      // --- HEADER DAY
+      if (now.is_valid()) {
+        int cur_dow = now.day_of_week;
+        it.print(0,0, id(font_small), id(lista_giorni)[cur_dow - 1].c_str());
+
+        int cur_mod = now.hour * 60 + now.minute;  // minute of day
+
+        // Alarm data: {hour_id, minute_id, enabled_id, day_ids[7] (Sun..Sat)}
+        // We access each alarm's entities directly
+        struct AlarmSlot {
+          float hour;
+          float minute;
+          bool enabled;
+          bool days[7];  // index 0=Sun, 1=Mon, ..., 6=Sat
+        };
+
+        AlarmSlot alarms[5];
+
+        // Alarm 1
+        alarms[0] = {
+          id(alarm_1_hour).state, id(alarm_1_minute).state,
+          id(alarm_1_enabled).state,
+          {id(alarm_1_sun).state, id(alarm_1_mon).state, id(alarm_1_tue).state,
+            id(alarm_1_wed).state, id(alarm_1_thu).state, id(alarm_1_fri).state,
+            id(alarm_1_sat).state}
+        };
+        // Alarm 2
+        alarms[1] = {
+          id(alarm_2_hour).state, id(alarm_2_minute).state,
+          id(alarm_2_enabled).state,
+          {id(alarm_2_sun).state, id(alarm_2_mon).state, id(alarm_2_tue).state,
+            id(alarm_2_wed).state, id(alarm_2_thu).state, id(alarm_2_fri).state,
+            id(alarm_2_sat).state}
+        };
+        // Alarm 3
+        alarms[2] = {
+          id(alarm_3_hour).state, id(alarm_3_minute).state,
+          id(alarm_3_enabled).state,
+          {id(alarm_3_sun).state, id(alarm_3_mon).state, id(alarm_3_tue).state,
+            id(alarm_3_wed).state, id(alarm_3_thu).state, id(alarm_3_fri).state,
+            id(alarm_3_sat).state}
+        };
+        // Alarm 4
+        alarms[3] = {
+          id(alarm_4_hour).state, id(alarm_4_minute).state,
+          id(alarm_4_enabled).state,
+          {id(alarm_4_sun).state, id(alarm_4_mon).state, id(alarm_4_tue).state,
+            id(alarm_4_wed).state, id(alarm_4_thu).state, id(alarm_4_fri).state,
+            id(alarm_4_sat).state}
+        };
+        // Alarm 5
+        alarms[4] = {
+          id(alarm_5_hour).state, id(alarm_5_minute).state,
+          id(alarm_5_enabled).state,
+          {id(alarm_5_sun).state, id(alarm_5_mon).state, id(alarm_5_tue).state,
+            id(alarm_5_wed).state, id(alarm_5_thu).state, id(alarm_5_fri).state,
+            id(alarm_5_sat).state}
+        };
+
+        bool alarm_soon = false;
+        int next_alarm_h = -1;
+        int next_alarm_m = -1;
+        int best_delta = 12 * 60 + 1;  // > 12 hours
+
+        if (id(master_alarm_enabled).state) {
+          for (int i = 0; i < 5; i++) {
+            if (!alarms[i].enabled) continue;
+            int a_mod = static_cast<int>(alarms[i].hour) * 60 + static_cast<int>(alarms[i].minute);
+
+            // Check today: alarm is later today and enabled for today's DOW
+            if (a_mod > cur_mod && alarms[i].days[cur_dow - 1]) {
+              int delta = a_mod - cur_mod;
+              if (delta <= 720 && delta < best_delta) {
+                best_delta = delta;
+                alarm_soon = true;
+                next_alarm_h = static_cast<int>(alarms[i].hour);
+                next_alarm_m = static_cast<int>(alarms[i].minute);
+              }
+            }
+
+            // Check tomorrow: alarm wraps into next day
+            int tomorrow_dow = (cur_dow % 7) + 1;  // 1-based wrapping
+            if (alarms[i].days[tomorrow_dow - 1]) {
+              int delta = (1440 - cur_mod) + a_mod;
+              if (delta <= 720 && delta < best_delta) {
+                best_delta = delta;
+                alarm_soon = true;
+                next_alarm_h = static_cast<int>(alarms[i].hour);
+                next_alarm_m = static_cast<int>(alarms[i].minute);
+              }
+            }
+          }
+        }
+
+        if (alarm_soon) {
+          it.image(113, 0, id(icon_sveglia));
+        }
+      }
+      if (id(alarm_ringing)) {
+        it.printf(0, 47, id(font_small), "!! SVEGLIA %d !!", id(active_alarm_index));
+      }
+
+# ===========================================================================
+# INTERVAL: alarm check logic (runs every second)
+# ===========================================================================
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          auto now = id(sntp_time).now();
+          if (!now.is_valid()) return;
+
+          // --- Auto-stop: ring duration exceeded ---
+          if (id(alarm_ringing)) {
+            const int duration_seconds = static_cast<int>(id(ring_duration_minutes).state) * 60;
+            if (id(ring_started_ts) > 0 &&
+                (now.timestamp - id(ring_started_ts)) >= duration_seconds) {
+              id(stop_alarm_script).execute();
+            }
+            return;
+          }
+
+          // --- Master off? Do nothing ---
+          if (!id(master_alarm_enabled).state) return;
+
+          // --- Build alarm structs ---
+          const int current_key = static_cast<int>(now.timestamp / 60);
+          int cur_dow = now.day_of_week;  // ESPHome: 1=Sun, 2=Mon, ..., 7=Sat
+
+          struct AlarmCheck {
+            int index;
+            int hour;
+            int minute;
+            bool enabled;
+            bool days[7];  // 0=Sun, 1=Mon, ..., 6=Sat
+          };
+
+          AlarmCheck alarms[5] = {
+            {1, static_cast<int>(id(alarm_1_hour).state), static_cast<int>(id(alarm_1_minute).state),
+             id(alarm_1_enabled).state,
+             {id(alarm_1_sun).state, id(alarm_1_mon).state, id(alarm_1_tue).state,
+              id(alarm_1_wed).state, id(alarm_1_thu).state, id(alarm_1_fri).state,
+              id(alarm_1_sat).state}},
+            {2, static_cast<int>(id(alarm_2_hour).state), static_cast<int>(id(alarm_2_minute).state),
+             id(alarm_2_enabled).state,
+             {id(alarm_2_sun).state, id(alarm_2_mon).state, id(alarm_2_tue).state,
+              id(alarm_2_wed).state, id(alarm_2_thu).state, id(alarm_2_fri).state,
+              id(alarm_2_sat).state}},
+            {3, static_cast<int>(id(alarm_3_hour).state), static_cast<int>(id(alarm_3_minute).state),
+             id(alarm_3_enabled).state,
+             {id(alarm_3_sun).state, id(alarm_3_mon).state, id(alarm_3_tue).state,
+              id(alarm_3_wed).state, id(alarm_3_thu).state, id(alarm_3_fri).state,
+              id(alarm_3_sat).state}},
+            {4, static_cast<int>(id(alarm_4_hour).state), static_cast<int>(id(alarm_4_minute).state),
+             id(alarm_4_enabled).state,
+             {id(alarm_4_sun).state, id(alarm_4_mon).state, id(alarm_4_tue).state,
+              id(alarm_4_wed).state, id(alarm_4_thu).state, id(alarm_4_fri).state,
+              id(alarm_4_sat).state}},
+            {5, static_cast<int>(id(alarm_5_hour).state), static_cast<int>(id(alarm_5_minute).state),
+             id(alarm_5_enabled).state,
+             {id(alarm_5_sun).state, id(alarm_5_mon).state, id(alarm_5_tue).state,
+              id(alarm_5_wed).state, id(alarm_5_thu).state, id(alarm_5_fri).state,
+              id(alarm_5_sat).state}}
+          };
+
+          for (int i = 0; i < 5; i++) {
+            auto &a = alarms[i];
+            if (!a.enabled) continue;
+
+            // Check day of week (cur_dow is 1-based: 1=Sun)
+            if (!a.days[cur_dow - 1]) continue;
+
+            // Check hour:minute match
+            if (a.hour != now.hour || a.minute != now.minute) continue;
+
+            // Prevent re-trigger within the same minute
+            if (id(last_trigger_keys)[i] == current_key) continue;
+
+            // TRIGGER!
+            id(last_trigger_keys)[i] = current_key;
+            id(alarm_ringing) = true;
+            id(active_alarm_index) = a.index;
+            id(ring_started_ts) = now.timestamp;
+            id(start_alarm_sound).execute();
+            return;  // only one alarm at a time
+          }
